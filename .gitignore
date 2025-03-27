@@ -15,6 +15,11 @@ faiss_index/
 # Logs
 *.log
 
+# PDF files (too large for Git)
+*.pdf
+pdfs/*.pdf
+pdfs/**/*.pdf
+
 # OS
 .DS_Store
 Thumbs.db 
