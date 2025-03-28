@@ -6,126 +6,254 @@
     <title>Ask The Rebbe</title>
     <style>
         body {
-            font-family: Arial, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
             max-width: 800px;
             margin: 0 auto;
             padding: 20px;
             background-color: #f5f5f5;
         }
+        h1 {
+            color: #003366;
+            text-align: center;
+            margin-bottom: 30px;
+        }
         .chat-container {
             background-color: white;
             border-radius: 10px;
             padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .chat-history {
-            height: 400px;
-            overflow-y: auto;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
             margin-bottom: 20px;
-            padding: 10px;
+        }
+        .chat-box {
+            height: 300px;
+            overflow-y: auto;
             border: 1px solid #ddd;
             border-radius: 5px;
-        }
-        .message {
+            padding: 15px;
             margin-bottom: 15px;
-            padding: 10px;
-            border-radius: 5px;
         }
         .user-message {
-            background-color: #e3f2fd;
-            margin-left: 20%;
+            background-color: #e6f3ff;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
         }
         .bot-message {
-            background-color: #f5f5f5;
-            margin-right: 20%;
+            background-color: #f0f0f0;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
         }
         .input-container {
             display: flex;
-            gap: 10px;
+            margin-top: 15px;
         }
-        #question-input {
-            flex-grow: 1;
+        input[type="text"] {
+            flex: 1;
             padding: 10px;
             border: 1px solid #ddd;
             border-radius: 5px;
-            font-size: 16px;
         }
         button {
-            padding: 10px 20px;
-            background-color: #2196f3;
+            background-color: #003366;
             color: white;
             border: none;
+            padding: 10px 15px;
             border-radius: 5px;
+            margin-left: 10px;
             cursor: pointer;
-            font-size: 16px;
         }
         button:hover {
-            background-color: #1976d2;
+            background-color: #00254d;
+        }
+        .upload-section {
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+        .upload-section h2 {
+            color: #003366;
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        .upload-status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            display: none;
+        }
+        .upload-status.success {
+            background-color: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        .upload-status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            display: block;
         }
         .loading {
             display: none;
             text-align: center;
-            margin: 10px 0;
+            margin-top: 10px;
+        }
+        .loading::after {
+            content: "Processing PDF...";
+            color: #003366;
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: "Processing PDF."; }
+            40% { content: "Processing PDF.."; }
+            60% { content: "Processing PDF..."; }
+            80% { content: "Processing PDF...."; }
+            100% { content: "Processing PDF....."; }
         }
     </style>
 </head>
 <body>
+    <h1>Ask The Rebbe</h1>
+    
+    <div class="upload-section">
+        <h2>Upload New PDF</h2>
+        <form id="upload-form">
+            <input type="file" id="pdf-file" accept=".pdf" required>
+            <button type="submit">Upload and Process</button>
+        </form>
+        <div id="upload-status" class="upload-status"></div>
+        <div id="loading" class="loading"></div>
+    </div>
+
     <div class="chat-container">
-        <h1>Ask The Rebbe</h1>
-        <div class="chat-history" id="chat-history"></div>
-        <div class="loading" id="loading">Thinking...</div>
+        <div id="chat-box" class="chat-box"></div>
         <div class="input-container">
-            <input type="text" id="question-input" placeholder="Ask your question about the Rebbe's teachings...">
-            <button onclick="askQuestion()">Ask</button>
+            <input type="text" id="question" placeholder="Ask your question about the Rebbe's teachings...">
+            <button onclick="askQuestion()">Send</button>
         </div>
     </div>
 
     <script>
-        const chatHistory = document.getElementById('chat-history');
-        const questionInput = document.getElementById('question-input');
-        const loadingIndicator = document.getElementById('loading');
-
-        function addMessage(message, isUser) {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-            messageDiv.textContent = message;
-            chatHistory.appendChild(messageDiv);
-            chatHistory.scrollTop = chatHistory.scrollHeight;
-        }
-
-        async function askQuestion() {
-            const question = questionInput.value.trim();
-            if (!question) return;
-
-            // Add user question to chat
-            addMessage(question, true);
-            questionInput.value = '';
-            loadingIndicator.style.display = 'block';
-
-            try {
-                const response = await fetch('/ask', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ question }),
-                });
-
-                const data = await response.json();
-                if (data.error) {
-                    addMessage('Error: ' + data.error, false);
+        // Load chat history from session storage
+        window.onload = function() {
+            const chatHistory = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+            const chatBox = document.getElementById('chat-box');
+            
+            chatHistory.forEach(message => {
+                if (message.type === 'user') {
+                    addUserMessage(message.text);
                 } else {
-                    addMessage(data.answer, false);
+                    addBotMessage(message.text);
                 }
-            } catch (error) {
-                addMessage('Error: Failed to get response from server', false);
-            } finally {
-                loadingIndicator.style.display = 'none';
+            });
+        };
+        
+        // Handle PDF upload
+        document.getElementById('upload-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const fileInput = document.getElementById('pdf-file');
+            const file = fileInput.files[0];
+            const statusDiv = document.getElementById('upload-status');
+            const loadingDiv = document.getElementById('loading');
+            
+            if (!file) {
+                showStatus('Please select a PDF file', false);
+                return;
             }
+            
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            loadingDiv.style.display = 'block';
+            statusDiv.style.display = 'none';
+            
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                loadingDiv.style.display = 'none';
+                if (data.success) {
+                    showStatus(data.message, true);
+                    fileInput.value = ''; // Clear the file input
+                } else {
+                    showStatus(data.message, false);
+                }
+            })
+            .catch(error => {
+                loadingDiv.style.display = 'none';
+                showStatus('Error uploading file: ' + error, false);
+            });
+        });
+        
+        function showStatus(message, isSuccess) {
+            const statusDiv = document.getElementById('upload-status');
+            statusDiv.textContent = message;
+            statusDiv.className = 'upload-status ' + (isSuccess ? 'success' : 'error');
+            statusDiv.style.display = 'block';
         }
-
-        // Allow Enter key to submit question
-        questionInput.addEventListener('keypress', function(e) {
+        
+        function askQuestion() {
+            const questionInput = document.getElementById('question');
+            const question = questionInput.value.trim();
+            
+            if (!question) return;
+            
+            addUserMessage(question);
+            
+            // Clear input
+            questionInput.value = '';
+            
+            // Save the message to session storage
+            saveMessage('user', question);
+            
+            // Send to API
+            fetch('/ask', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    question: question
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                addBotMessage(data.answer);
+                
+                // Save the response to session storage
+                saveMessage('bot', data.answer);
+            })
+            .catch((error) => {
+                console.error('Error:', error);
+                addBotMessage('I apologize, but I encountered an error processing your question. Please try again later.');
+            });
+        }
+        
+        function addUserMessage(message) {
+            const chatBox = document.getElementById('chat-box');
+            chatBox.innerHTML += `<div class="user-message"><strong>You:</strong> ${message}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        
+        function addBotMessage(message) {
+            const chatBox = document.getElementById('chat-box');
+            chatBox.innerHTML += `<div class="bot-message"><strong>Rebbe:</strong> ${message}</div>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+        
+        function saveMessage(type, text) {
+            const chatHistory = JSON.parse(sessionStorage.getItem('chatHistory') || '[]');
+            chatHistory.push({type, text});
+            sessionStorage.setItem('chatHistory', JSON.stringify(chatHistory));
+        }
+        
+        // Allow submit on Enter key
+        document.getElementById('question').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 askQuestion();
             }

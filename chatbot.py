@@ -1,24 +1,37 @@
 import os
 from typing import List, Tuple, Dict, Any
 from dotenv import load_dotenv
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
+from werkzeug.utils import secure_filename
 from langchain.vectorstores import FAISS
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
-from langchain.memory import ConversationBufferMemory
+from langchain.memory import ConversationBufferMemory, ConversationSummaryMemory
 from langchain.chains.base import Chain
 from langchain.prompts import PromptTemplate
 from pydantic import BaseModel, Field
+from langchain.document_loaders import PDFPlumberLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import traceback
 
 # Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = 'pdfs'
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+ALLOWED_EXTENSIONS = {'pdf'}
 
-# Global variable to store the QA chain
+# Ensure upload folder exists
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Global variables to store the QA chain and vector store
 qa_chain = None
+vectorstore = None
+embeddings = None
+llm = None
+memory = None
 
 class CustomConversationalChain(Chain, BaseModel):
     """Custom chain that properly handles memory and output format."""
@@ -128,6 +141,8 @@ def verify_vector_store(vectorstore):
 def initialize_chatbot():
     """Initialize the chatbot components."""
     try:
+        global vectorstore, embeddings, llm, memory, qa_chain
+        
         # Check for OpenAI API key
         if not os.getenv('OPENAI_API_KEY'):
             raise ValueError("OPENAI_API_KEY not found in environment variables. Please check your .env file.")
@@ -193,9 +208,92 @@ def process_query(message: str) -> str:
         print(traceback.format_exc())
         return error_message
 
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def process_pdf(file_path):
+    """Process a PDF file and add it to the vector store."""
+    try:
+        global vectorstore, embeddings, llm, memory, qa_chain
+        
+        print(f"Processing PDF: {file_path}")
+        loader = PDFPlumberLoader(file_path)
+        documents = loader.load()
+        print(f"Extracted {len(documents)} pages from PDF")
+        
+        # Split documents into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=300,
+            chunk_overlap=100,
+            length_function=len,
+            separators=["\n\n", "\n", " ", ""]
+        )
+        chunks = text_splitter.split_documents(documents)
+        print(f"Created {len(chunks)} chunks")
+        
+        # Initialize embeddings if not already done
+        if embeddings is None:
+            embeddings = OpenAIEmbeddings()
+        
+        # Add to vector store
+        if vectorstore is None:
+            vectorstore = FAISS.from_documents(chunks, embeddings)
+        else:
+            vectorstore.add_documents(chunks)
+        
+        # Save the updated vector store
+        vectorstore.save_local("faiss_index")
+        print("Vector store updated and saved")
+        
+        # Recreate the conversation chain with updated vector store
+        if llm is None:
+            llm = ChatOpenAI(
+                model_name="gpt-3.5-turbo",
+                temperature=0.7
+            )
+        
+        if memory is None:
+            memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                return_messages=True
+            )
+        
+        qa_chain = CustomConversationalChain(
+            llm=llm,
+            retriever=vectorstore.as_retriever(search_kwargs={"k": 5, "fetch_k": 10}),
+            memory=memory
+        )
+        
+        return True, f"Successfully processed {len(chunks)} chunks from {len(documents)} pages"
+    except Exception as e:
+        print(f"Error processing PDF: {str(e)}")
+        return False, str(e)
+
 @app.route('/')
 def home():
     return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': 'No file part'})
+    
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'No selected file'})
+    
+    if file and allowed_file(file.filename):
+        filename = secure_filename(file.filename)
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
+        
+        success, message = process_pdf(file_path)
+        return jsonify({
+            'success': success,
+            'message': message
+        })
+    
+    return jsonify({'success': False, 'message': 'Invalid file type'})
 
 @app.route('/ask', methods=['POST'])
 def ask():
@@ -203,10 +301,36 @@ def ask():
     question = data.get('question', '')
     
     if not question:
-        return jsonify({'error': 'No question provided'}), 400
+        return jsonify({'error': 'No question provided'})
     
-    response = process_query(question)
-    return jsonify({'answer': response})
+    print(f"\nReceived query: {question}")
+    
+    # Process the question if the vectorstore is available
+    if vectorstore and qa_chain:
+        try:
+            print(f"Processing question: {question}")
+            result = qa_chain({"question": question})
+            answer = result['answer']
+            
+            # Prepare response
+            response = {
+                'answer': answer,
+                'success': True
+            }
+        except Exception as e:
+            print(f"Error processing question: {str(e)}")
+            response = {
+                'answer': "I apologize, but I encountered an error processing your question. Please try again later.",
+                'success': False,
+                'error': str(e)
+            }
+    else:
+        response = {
+            'answer': "I apologize, but the knowledge base is not currently available. Please try again later.",
+            'success': False
+        }
+    
+    return jsonify(response)
 
 if __name__ == "__main__":
     print("Starting chatbot initialization...")
